@@ -1,0 +1,387 @@
+---
+title: "Covid Dataset"
+author: "Justin Nguyen"
+date: "4/10/2021"
+output: html_document
+---
+
+Packages
+```{r} 
+install.packages("tidyverse", "zoo", "readxl","corrplot")
+install.packages("rpart")
+install.packages("MASS")
+install.packages("cluster")
+install.packages("caTools")
+install.packages("randomForest")
+install.packages("rpart.plot")
+```
+
+Library
+``` {r}
+library(tidyverse)
+library(rpart)
+library(readxl)
+library(corrplot)
+library(MASS)
+library(zoo)
+library(cluster)
+library(caTools)
+library(randomForest)
+library(rpart.plot)
+```
+
+Install File
+``` {r}
+covid_db_raw <- as.data.frame(read.csv("covid19.csv"))
+healthcare_db_raw <- as.data.frame(read_excel("Country Healthcare Performance.xlsx"))
+```
+
+Data Cleaning
+
+```{r}
+
+
+covid_db_vax <- covid_db_raw %>% 
+  mutate(Sinovac = case_when(str_detect(vaccines, "Sinovac") ~ 1,
+                             str_detect(vaccines, "Sinopharm") ~ 1),
+         Sputnik = case_when(str_detect(vaccines, "Sputnik") ~ 1),
+         Johnson = case_when(str_detect(vaccines, "Johnson&Johnson")~ 1),
+         Pfizer = case_when(str_detect(vaccines, "Pfizer") ~ 1),
+         Moderna = case_when(str_detect(vaccines, "Moderna") ~ 1),
+         AstraZeneca = case_when(str_detect(vaccines, "Oxford") ~ 1),
+         Covaxin = case_when(str_detect(vaccines, "Covaxin") ~ 1)) %>%
+  dplyr::select(country, Sinovac, Sputnik, Johnson, Pfizer, Moderna, AstraZeneca, Covaxin) %>%
+  replace(is.na(.), 0) %>%
+  mutate(Total_Vax_Type = Sinovac  + Sputnik + Johnson + Pfizer + Moderna + AstraZeneca + Covaxin) 
+
+covid_db_full_clean <- covid_db_raw %>%
+  left_join(covid_db_vax, by = "country") %>% 
+  mutate(GDP_Bracket = ifelse(GDP_per_capita >= 40000, "High GDP Per Cap", 
+                              ifelse(GDP_per_capita >= 30000, "Upper Middle GDP Per Cap",
+                                     ifelse(GDP_per_capita >= 20000, "Middle GDP Per Cap",
+                                            ifelse(GDP_per_capita >= 10000, "Lower Middle GDP Per Cap", "Low GDP Per Cap"))))) %>%
+  left_join(healthcare_db_raw, by = c( "country" = "Country"))
+
+```
+To dO: 
+
+  1. Develop and Test Normalized Model outcomes such as people vaccinated per hundred (Done)
+  2. Connect Findings to all analysis (Done)
+  3. Test correlations between variables for interaction and for multi collinearity (Done)
+  4. Explore other Tree
+  5. Consider whether to use regression trees or cluster modeling
+  6. Add lessons learned and findings 
+  7. Research additional modeling 
+  
+Descriptive Analytics 
+``` {r}
+covid_db_full_clean %>%
+  ggplot(aes(x = Health_expenditure, y = total_vaccinations_per_hundred, col = GDP_Bracket)) +
+  geom_point() + 
+  scale_y_continuous(trans = 'log10')
+
+
+#Descriptive Analysis points for Presentation
+  #Find by Bracket, Make note of why we did use region
+
+  #Population, GDP Per Cap, Health Expenditure, Total Vaccinations, People Vaccinations, Total Vax Type
+
+covid_db_full_clean %>%
+  group_by(GDP_Bracket) %>%
+  filter(!is.na(GDP_Bracket)) %>%
+  summarise(Avg_Pop = mean(population, na.rsdm = T),
+            SD_Pop = sd(population, na.rm = T),
+            Avg_GDP_Per_Cap = mean(GDP_per_capita ,na.rm = T),
+            SD_GDP_Per_Cap = sd(GDP_per_capita ,na.rm = T),
+            AVG_Health_Expenduture = mean(Health_expenditure, na.rm = T),
+            SD_Health_Expenduture = sd(Health_expenditure, na.rm = T)
+            ,
+            AVG_Total_Vaccination = mean(total_vaccinations),
+            AVG_people_Vaccinated = mean(people_vaccinated, na.rm = T),
+            AVG_Vaccine_Utilization = mean(Total_Vax_Type))
+#Note Max Min countries and show notable countries 
+
+covid_db_full_clean %>%
+  filter(country %in% c("United States of America", "United Kingdom", "China", "Russia", "Japan", "South Africa", "Israel", "Germany", "India", "Brazil", "Grenada")) %>%
+  group_by(country) %>%
+  summarise(Avg_Pop = mean(population, na.rm = T),
+            Avg_GDP_Per_Cap = mean(GDP_per_capita ,na.rm = T),
+            AVG_Health_Expenduture = mean(Health_expenditure, na.rm = T),
+            AVG_Total_Vaccination = mean(total_vaccinations),
+            AVG_people_Vaccinated = mean(people_vaccinated, na.rm = T),
+            AVG_Vaccine_Utilization = mean(Total_Vax_Type))
+
+chisq.test(table(covid_db_full_clean$GDP_Bracket))
+chisq.test(table(covid_db_full_clean$GDP_Bracket), table(covid_db_full_clean$Healthcare_System))
+
+t.test(GDP_per_capita ~ Pfizer, data = covid_db_full_clean)
+
+anova(aov(people_vaccinated_per_hundred ~ GDP_growth_rate * CO2_emission, data = covid_db_full_clean))
+
+```
+
+
+visual Analytics 
+```{r}
+
+covid_db_full_clean %>%
+  ggplot(aes(x = population, y = total_vaccinations_per_hundred, col = region)) +
+  geom_point() +
+  scale_x_continuous(trans = 'log10') + 
+  scale_y_continuous(trans = 'log10')+
+  geom_abline()
+#Should consolidate the Regions 
+
+#Histogram Stopgap Method
+x <- covid_db_full_clean %>% 
+  summarise(Sinovac = sum(Sinovac),
+            Sputnik = sum(Sputnik),
+            Johnson = sum(Johnson),
+            Pfizer = sum(Pfizer),
+            Moderna = sum(Moderna),
+            Oxford = sum(AstraZeneca),
+            Covaxin = sum(Covaxin)) %>%
+  pivot_longer(everything()) 
+
+barplot(x$value, 
+        xlab = "Vaccine", 
+        ylab = "# of Countries",
+        main = "Number of Applications of Covid 19 Vaccines",
+        names.arg = x$name, 
+        col = "dark blue")
+
+covid_db_full_clean %>% #Need to determine What the heck is employment Industry 
+  ggplot(aes(x = employment_industry, y = total_vaccinations, col = GDP_Bracket)) +
+  geom_point() +
+  scale_y_log10() 
+
+
+covid_db_full_clean %>%
+  filter(!is.na(GDP_Bracket) & !is.na(people_vaccinated_per_hundred)) %>%
+  ggplot(aes(x = GDP_Bracket, y = people_vaccinated_per_hundred)) +
+  geom_boxplot() +
+  scale_y_continuous(limits = c(0, 40)) + 
+  coord_flip() +
+  ggtitle("Boxplot: GDP_Bracket Versus People Vaccinated per Hundreds", "Outliers over 40 Removed") + 
+  theme_classic()
+
+covid_db_full_clean %>%
+  group_by(GDP_Bracket) %>%
+  summarise(max(people_vaccinated_per_hundred, na.rm = T),
+            mean(Total_Vax_Type))
+
+covid_db_full_clean %>%
+  filter(!is.na(GDP_Bracket)) %>%
+  ggplot(aes(x = population, y = people_vaccinated_per_hundred, col = GDP_Bracket)) +
+  geom_point() + 
+  scale_x_log10() + 
+  geom_abline() +
+  xlab("Log(Population)") +
+  ggtitle("Log of Population Versus People Vaccinated", "Countries with no GDP per Capita removed") +
+  theme_classic()
+
+covid_db_full_clean %>%
+  filter(!is.na(GDP_Bracket)) %>%
+  ggplot(aes(x = population, y = people_vaccinated_per_hundred, col = Healthcare_System)) +
+  geom_point() + 
+  scale_x_log10() + 
+  geom_abline() +
+  xlab("Log(Population)") +
+  ggtitle("Log of Population Versus People Vaccinated", "Filtered by Healthcare Model Type") +
+  theme_classic()
+
+#Histogram
+
+covid_db_full_clean %>% 
+  filter(!is.na(people_vaccinated_per_hundred)) %>% 
+  ggplot(aes(x = people_vaccinated_per_hundred)) + 
+  geom_histogram(binwidth = 5, colour="black", fill="white") 
+
+covid_db_full_clean %>% 
+  filter(!is.na(people_vaccinated)) %>% 
+  ggplot(aes(x = people_vaccinated)) + 
+  geom_histogram(colour="black", 
+                 fill="white") 
+
+#Histogram with layers
+covid_db_full_clean %>% 
+  filter(!is.na(people_vaccinated_per_hundred)) %>% 
+  ggplot(aes(x = people_vaccinated_per_hundred, fill = GDP_Bracket)) + 
+  geom_histogram(binwidth = 15, 
+                 position = "dodge",
+                 alpha=.5) 
+
+covid_db_full_clean %>% 
+  filter(!is.na(people_vaccinated)) %>% 
+  ggplot(aes(x = people_vaccinated, fill = GDP_Bracket)) + 
+  geom_histogram( position = "identity",alpha=.5) 
+
+```
+
+Predictive Analytics 
+```{r}
+#Correlation Matrix
+covid_db_train <- covid_db_full_clean %>% 
+  drop_na()
+corrplot(cor(covid_db_train[,c(4:15,17:20,22:23,25:29,31:32)]))
+#Interesting correlations
+  #Covaxin has strong positive correlation with population 
+  #Pfizer and moderna has strong positive correlation with Strong GDP per cap
+    #Pfizer has strong negative correlation with country with larger younger populations
+  #Covaxin and Astrazeneca has strong correlation with total vax
+  #People vaccinated has strong correlation with older pops, gdp per gap (weak), population,  CO2 Emmission, Health Expenditure, covaxin?, 
+
+#Break Data down into testing data and training data
+
+
+#Regression
+summary(lm(people_vaccinated~ population + Population_age_60_and_above + CO2_emission + GDP_per_capita, data = covid_db_train))
+
+summary(lm(people_vaccinated_per_hundred~ population + Population_age_60_and_above + CO2_emission , data = covid_db_train))
+#Regression with interaction
+
+best_model <- summary(lm(people_vaccinated ~ population*Population_age_60_and_above*GDP_per_capita + CO2_emission, data = covid_db_train))
+  #Best result so far Adjusted R of .93
+  #Shows strong correlation between how much of the population is over 60
+  #Best Model
+best_model
+
+plot(people_vaccinated~ population, data = covid_db_full_clean, main = "Multivariate Interaction Model on People Vaccinated", xlab = "Population", ylab = "People Vaccinated", col = "Dark Blue")
+abline(lm(people_vaccinated ~ population*Population_age_60_and_above*GDP_per_capita + CO2_emission, data = covid_db_train))
+
+#prediction
+
+covid_db_full_clean %>%
+  mutate(people_vaccinated_predicted = -2.012*10^6 + 1.548*10^1*population + 1.149*10^5*Population_age_60_and_above + 1.239*10^2 * GDP_per_capita + -3.977*10^2*CO2_emission + -8.804*10^-1 *Population_age_60_and_above*population + 1.311*10^-2*population*GDP_per_capita + -5.877 *Population_age_60_and_above*GDP_per_capita + -3.608*10^-4*population*Population_age_60_and_above*GDP_per_capita,
+         Difference = people_vaccinated - people_vaccinated_predicted,
+         Ratio = people_vaccinated_predicted/(population*1000)) %>%
+  filter(country %in% c("China", "Thailand", "Mexico")) %>%
+  dplyr::select(country, population, Population_age_60_and_above, GDP_per_capita, CO2_emission, people_vaccinated_predicted, Ratio) %>%
+  view()
+
+covid_db_full_model<- covid_db_full_clean %>%
+  mutate(people_vaccinated_predicted = -2.012*10^6 + 1.548*10^1*population + 1.149*10^5*Population_age_60_and_above + 1.239*10^2 * GDP_per_capita + -3.977*10^2*CO2_emission + -8.804*10^-1 *Population_age_60_and_above*population + 1.311*10^-2*population*GDP_per_capita + -5.877 *Population_age_60_and_above*GDP_per_capita + -3.608*10^-4*population*Population_age_60_and_above*GDP_per_capita,
+         Difference = people_vaccinated - people_vaccinated_predicted,
+         Ratio = people_vaccinated_predicted/(population*1000)) 
+
+#New Model
+summary(lm(people_vaccinated ~ population*GDP_per_capita + CO2_emission, data = covid_db_train))
+best_model <- lm(people_vaccinated ~ population*GDP_per_capita + CO2_emission, data = covid_db_train)
+  #By Removing People by 60 it removes a variable that was in a different form factor and was multicollinear 
+summary(lm(people_vaccinated_per_hundred ~ population*GDP_per_capita + CO2_emission, data = covid_db_train))
+
+
+covid_db_full_clean %>% 
+  mutate(Predicted_People_Vaccinated = predict(best_model, newdata = covid_db_full_clean, type = "response"),
+         Difference = Predicted_People_Vaccinated - people_vaccinated) %>%
+  group_by(GDP_Bracket) %>% 
+  summarise(mean(Predicted_People_Vaccinated, na.rm = T),
+            mean(Difference, na.rm = T)) %>% 
+  view()
+summary(lm(people_vaccinated_per_hundred ~ GDP_per_capita + Urban_population + Total_Vax_Type, data = covid_db_train))
+
+covid_db_full_clean %>% 
+  mutate(Predicted_People_Vaccinated = predict(best_model, newdata = covid_db_full_clean, type = "response"),
+         Difference = Predicted_People_Vaccinated - people_vaccinated) %>%
+  filter(country %in% c("China", "Mexico", "Thailand")) %>%
+  dplyr::select(country,
+         population,
+         GDP_per_capita,
+         Predicted_People_Vaccinated)
+
+
+
+```
+
+Other Models
+```{r}
+#predicting Function 
+
+vaccine_predictor <- function(vaccine_type, model) {
+  Predicted_Decision <- predict(model, test_data, type = 'class')
+  table(vaccine_type, Predicted_Decision)
+}
+
+#Kmeans
+covid_vaccines <- covid_db_vax
+covid_vaccines$Total_Vax_Type <- NULL
+
+test <- kmeans(covid_vaccines[2:7], centers = 7)
+
+clusplot(covid_vaccines, test$cluster, color = T, shade = T, lines = 0)
+
+x <- covid_db_full_clean %>% 
+  dplyr::select(GDP_per_capita, people_vaccinated, Urban_population, Total_Vax_Type, population) %>%
+  drop_na()
+test_2 <- kmeans(x, centers = 5)
+clusplot(x, test_2$cluster, color = T, shade = T, lines = 0)
+
+
+#Random Forest 
+#Replace Random Forest with Trams' version 
+
+
+#Training and Testing Data
+sample <- sample.split(test_random$people_vaccinated_per_hundred, SplitRatio = .75)
+train_data <- subset(test_random, sample == T)
+test_data <- subset(test_random, sample == F)
+
+randon_forest_1 <- randomForest(people_vaccinated_per_hundred ~. ,data = train_data)
+prediction_1 <- predict(randon_forest_1, newdata = test_data[-17])
+table(test_data[,17], prediction_1)
+
+
+
+#Regression Tree for vaccine
+Pfizer_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = Pfizer ~ ., 
+                     method = "class")
+rpart.plot(Pfizer_Tree, main = "Pfizer Adoption")
+vaccine_predictor(test_data$Pfizer, Pfizer_Tree)
+
+Moderna_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = Moderna ~ ., 
+                     method = "class")
+rpart.plot(Moderna_Tree, main = "Moderna Adoption")
+vaccine_predictor(test_data$Moderna, Moderna_Tree)
+
+Sinovac_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = Sinovac ~ ., 
+                     method = "class")
+rpart.plot(Sinovac_Tree, main = "Sinovac Adoption")
+
+AstraZeneca_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = AstraZeneca ~ ., 
+                     method = "class")
+rpart.plot(AstraZeneca_Tree, main = "Astrazeneca Adoption")
+
+Johnson_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = Johnson ~ ., 
+                     method = "class")
+rpart.plot(Johnson_Tree, main = "J&J Adoption")
+
+Sputnik_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = Sputnik ~ ., 
+                     method = "class")
+rpart.plot(Sputnik_Tree, main = "Sputnik Adoption")
+
+predict(AstraZeneca_Tree, test_data, type = 'class') 
+table(test_data$AstraZeneca, predict(AstraZeneca_Tree, test_data, type = 'class'))
+
+Covaxin_Tree <- train_data %>% 
+  dplyr::select(-total_vaccinations, -people_vaccinated, -total_vaccinations_per_hundred, -people_vaccinated_per_hundred, -Total_Vax_Type) %>%
+  rpart(formula = Covaxin ~ ., 
+                     method = "class")
+rpart.plot(Covaxin_Tree, main = "Covaxin Adoption")
+
+
+
+
+
+```
